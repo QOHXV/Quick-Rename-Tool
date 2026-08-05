@@ -4,7 +4,6 @@ from tkinter import ttk, filedialog, messagebox, Toplevel
 from datetime import datetime
 
 def get_file_creation_time(filepath):
-    """Get the real creation time of a file across platforms"""
     if os.name == 'nt':
         import ctypes
         from ctypes import wintypes
@@ -32,7 +31,7 @@ class BatchRenamerApp:
         self.root.geometry("880x620")
         self.root.resizable(True, True)
 
-        # 变量
+        
         self.folder_path = tk.StringVar()
         self.mode = tk.StringVar(value="add")  # add / number
         self.add_position = tk.StringVar(value="suffix")  # prefix / suffix
