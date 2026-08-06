@@ -1,303 +1,262 @@
 import os
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, Toplevel
-from datetime import datetime
+from tkinter import ttk, filedialog, messagebox
 
-def get_file_creation_time(filepath):
-    if os.name == 'nt':
-        import ctypes
-        from ctypes import wintypes
-        kernel32 = ctypes.WinDLL('kernel32', use_last_error=True)
-        ctime = wintypes.FILETIME()
-        handle = kernel32.CreateFileW(filepath, 0, 0, None, 3, 0x02000000, None)
-        if handle == wintypes.HANDLE(-1).value:
-            return os.path.getmtime(filepath)
-        kernel32.GetFileTime(handle, ctypes.byref(ctime), None, None)
-        kernel32.CloseHandle(handle)
-        val = (ctime.dwHighDateTime << 32) + ctime.dwLowDateTime
-        return (val / 10000000) - 11644473600
-    else:
-        stat = os.stat(filepath)
-        try:
-            return stat.st_birthtime
-        except AttributeError:
-            return stat.st_mtime
+# Get time
+def get_file_ctime(filepath):
+    stat = os.stat(filepath)
+    try:
+        return stat.st_birthtime
+    except AttributeError:
+        return os.path.getctime(filepath)
 
 
-class BatchRenamerApp:
+class BatchRenamer:
     def __init__(self, root):
         self.root = root
-        self.root.title("Batch File Renamer (Safe Preview)")
-        self.root.geometry("880x620")
-        self.root.resizable(True, True)
+        self.root.title("Batch Rename Tool")
+        self.root.geometry("860x600")
 
-        
         self.folder_path = tk.StringVar()
-        self.mode = tk.StringVar(value="add")  # add / number
-        self.add_position = tk.StringVar(value="suffix")  # prefix / suffix
-        self.add_text = tk.StringVar()
-        self.number_criteria = tk.StringVar(value="time")  # time / size
-        self.number_reverse_sort = tk.BooleanVar(value=True)
         self.file_list = []
 
-        self.extensions = ['.txt', '.png', '.jpg', '.docx', '.exe']
-        self.ext_vars = {ext: tk.BooleanVar(value=False) for ext in self.extensions}
+        self.rename_mode = tk.StringVar(value="add")
+        self.add_pos = tk.StringVar(value="suffix")
+        self.add_text = tk.StringVar()
+        self.sort_by = tk.StringVar(value="time")
+        self.reverse_sort = tk.BooleanVar(value=True)
+
+        self.ext_options = ['.txt', '.png', '.jpg', '.docx', '.exe']
+        self.ext_vars = {}
+        for ext in self.ext_options:
+            self.ext_vars[ext] = tk.BooleanVar(value=False)
         self.custom_ext = tk.StringVar()
 
-        self.create_widgets()
-        self.update_mode_ui()
+        self.build_ui()
 
-    def create_widgets(self):
-        main_panel = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
-        main_panel.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+    def build_ui(self):
+        left = ttk.Frame(self.root, width=380)
+        left.pack(side=tk.LEFT, fill=tk.Y, padx=8, pady=8)
+        right = ttk.Frame(self.root)
+        right.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5, pady=8)
 
-        left_frame = ttk.Frame(main_panel, width=400)
-        main_panel.add(left_frame, weight=1)
+        folder_box = ttk.LabelFrame(left, text="Select Folder", padding=6)
+        folder_box.pack(fill=tk.X, pady=5)
+        ttk.Button(folder_box, text="Browse", command=self.choose_folder).pack(side=tk.LEFT, padx=2)
+        ttk.Entry(folder_box, textvariable=self.folder_path).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
-        folder_frame = ttk.LabelFrame(left_frame, text="Folder Selection", padding=5)
-        folder_frame.pack(fill=tk.X, pady=5)
-        ttk.Button(folder_frame, text="Browse Folder", command=self.select_folder).pack(side=tk.LEFT, padx=2)
-        ttk.Entry(folder_frame, textvariable=self.folder_path).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        filter_box = ttk.LabelFrame(left, text="File Extension Filter", padding=6)
+        filter_box.pack(fill=tk.X, pady=5)
+        ttk.Checkbutton(filter_box, text="txt", variable=self.ext_vars['.txt'], command=self.refresh_list).grid(row=0, column=0, sticky='w', padx=3)
+        ttk.Checkbutton(filter_box, text="png", variable=self.ext_vars['.png'], command=self.refresh_list).grid(row=0, column=1, sticky='w', padx=3)
+        ttk.Checkbutton(filter_box, text="jpg", variable=self.ext_vars['.jpg'], command=self.refresh_list).grid(row=0, column=2, sticky='w', padx=3)
+        ttk.Checkbutton(filter_box, text="docx", variable=self.ext_vars['.docx'], command=self.refresh_list).grid(row=1, column=0, sticky='w', padx=3)
+        ttk.Checkbutton(filter_box, text="exe", variable=self.ext_vars['.exe'], command=self.refresh_list).grid(row=1, column=1, sticky='w', padx=3)
 
-        filter_frame = ttk.LabelFrame(left_frame, text="Extension Filter", padding=5)
-        filter_frame.pack(fill=tk.X, pady=5)
-        row, col = 0, 0
-        for ext in self.extensions:
-            disp = ext.lstrip('.')
-            chk = ttk.Checkbutton(filter_frame, text=disp, variable=self.ext_vars[ext],
-                                  command=self.refresh_file_list)
-            chk.grid(row=row, column=col, sticky=tk.W, padx=3, pady=2)
-            col += 1
-            if col > 2:
-                col = 0
-                row += 1
-        ttk.Label(filter_frame, text="Custom:", foreground="gray").grid(row=row+1, column=0, sticky=tk.W)
-        ttk.Entry(filter_frame, textvariable=self.custom_ext, width=10).grid(row=row+1, column=1)
-        ttk.Button(filter_frame, text="Add", command=self.add_custom_ext).grid(row=row+1, column=2)
-        ttk.Label(filter_frame, text="(None=all files)", foreground="gray").grid(row=row+2, column=0, columnspan=3, sticky=tk.W)
+        ttk.Label(filter_box, text="Custom:").grid(row=2, column=0, sticky='w')
+        ttk.Entry(filter_box, textvariable=self.custom_ext, width=10).grid(row=2, column=1)
+        ttk.Button(filter_box, text="Add", command=self.add_ext).grid(row=2, column=2)
+        ttk.Label(filter_box, text="No selection = all files", foreground='gray').grid(row=3, column=0, columnspan=3, sticky='w', pady=2)
 
-        mode_frame = ttk.LabelFrame(left_frame, text="Mode", padding=5)
-        mode_frame.pack(fill=tk.X, pady=5)
-        ttk.Radiobutton(mode_frame, text="Add Suffix/Prefix", variable=self.mode, value="add", command=self.update_mode_ui).pack(side=tk.LEFT, padx=4)
-        ttk.Radiobutton(mode_frame, text="Number Sequence", variable=self.mode, value="number", command=self.update_mode_ui).pack(side=tk.LEFT, padx=4)
+        mode_box = ttk.LabelFrame(left, text="Rename Mode", padding=6)
+        mode_box.pack(fill=tk.X, pady=5)
+        ttk.Radiobutton(mode_box, text="Add Prefix/Suffix", variable=self.rename_mode, value="add", command=self.switch_mode).pack(side=tk.LEFT, padx=5)
+        ttk.Radiobutton(mode_box, text="Number Sequence", variable=self.rename_mode, value="number", command=self.switch_mode).pack(side=tk.LEFT, padx=5)
 
-        self.dynamic_frame = ttk.Frame(left_frame)
-        self.dynamic_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        self.add_panel = ttk.LabelFrame(left, text="Prefix / Suffix Settings", padding=6)
+        self.number_panel = ttk.LabelFrame(left, text="Numbering Settings", padding=6)
 
-        right_frame = ttk.Frame(main_panel)
-        main_panel.add(right_frame, weight=2)
-        ttk.Label(right_frame, text="Files in Folder (filtered)").pack(anchor=tk.W)
-        self.file_listbox = tk.Listbox(right_frame)
-        self.file_listbox.pack(fill=tk.BOTH, expand=True, padx=5, pady=4)
-        scrollbar = ttk.Scrollbar(self.file_listbox, orient=tk.VERTICAL, command=self.file_listbox.yview)
-        self.file_listbox.config(yscrollcommand=scrollbar.set)
-        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-        ttk.Button(right_frame, text="Refresh List", command=self.refresh_file_list).pack(pady=2)
+        ttk.Radiobutton(self.add_panel, text="Add to start (prefix)", variable=self.add_pos, value="prefix").pack(anchor='w', padx=5)
+        ttk.Radiobutton(self.add_panel, text="Add after name (suffix)", variable=self.add_pos, value="suffix").pack(anchor='w', padx=5)
+        ttk.Entry(self.add_panel, textvariable=self.add_text).pack(fill=tk.X, padx=5, pady=5)
+        ttk.Button(self.add_panel, text="Preview Rename", command=self.preview_add).pack(pady=3)
 
-    def add_custom_ext(self):
-        txt = self.custom_ext.get().strip().lower()
-        if not txt:
+        ttk.Label(self.number_panel, text="Files will become 1.ext, 2.ext ... keep original extension").pack(anchor='w')
+        ttk.Radiobutton(self.number_panel, text="Sort by creation time", variable=self.sort_by, value="time").pack(anchor='w', padx=5, pady=2)
+        ttk.Radiobutton(self.number_panel, text="Sort by file size", variable=self.sort_by, value="size").pack(anchor='w', padx=5)
+        ttk.Checkbutton(self.number_panel, text="Reverse order (newest / largest first)", variable=self.reverse_sort).pack(anchor='w', padx=5, pady=2)
+        ttk.Button(self.number_panel, text="Preview Rename", command=self.preview_number).pack(pady=5)
+
+        self.add_panel.pack(fill=tk.X, pady=5)
+
+        ttk.Label(right, text="Files in current folder").pack(anchor='w')
+        self.listbox = tk.Listbox(right)
+        self.listbox.pack(fill=tk.BOTH, expand=True, pady=4)
+        scroll = ttk.Scrollbar(self.listbox, orient=tk.VERTICAL, command=self.listbox.yview)
+        self.listbox.config(yscrollcommand=scroll.set)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        ttk.Button(right, text="Refresh List", command=self.refresh_list).pack(pady=3)
+
+    def switch_mode(self):
+        if self.rename_mode.get() == "add":
+            self.number_panel.pack_forget()
+            self.add_panel.pack(fill=tk.X, pady=5)
+        else:
+            self.add_panel.pack_forget()
+            self.number_panel.pack(fill=tk.X, pady=5)
+
+    def choose_folder(self):
+        path = filedialog.askdirectory()
+        if path:
+            self.folder_path.set(path)
+            self.refresh_list()
+
+    def add_ext(self):
+        ext = self.custom_ext.get().strip().lower()
+        if not ext:
             return
-        if not txt.startswith('.'):
-            txt = '.' + txt
-        if txt not in self.extensions:
-            self.extensions.append(txt)
-            self.ext_vars[txt] = tk.BooleanVar(value=False)
+        if not ext.startswith('.'):
+            ext = '.' + ext
+        if ext not in self.ext_options:
+            self.ext_options.append(ext)
+            self.ext_vars[ext] = tk.BooleanVar(value=False)
         self.custom_ext.set("")
-        self.refresh_file_list()
+        self.refresh_list()
 
-    def update_mode_ui(self):
-        for child in self.dynamic_frame.winfo_children():
-            child.destroy()
-        if self.mode.get() == "add":
-            self.create_add_mode_ui()
-        else:
-            self.create_number_mode_ui()
-
-    def create_add_mode_ui(self):
-        frame = ttk.Frame(self.dynamic_frame)
-        frame.pack(fill=tk.BOTH, expand=True)
-        pos_frame = ttk.LabelFrame(frame, text="Position", padding=5)
-        pos_frame.pack(fill=tk.X, pady=5)
-        ttk.Radiobutton(pos_frame, text="Prefix (start)", variable=self.add_position, value="prefix").pack(side=tk.LEFT, padx=5)
-        ttk.Radiobutton(pos_frame, text="Suffix (end before ext)", variable=self.add_position, value="suffix").pack(side=tk.LEFT, padx=5)
-
-        entry_frame = ttk.LabelFrame(frame, text="Text to Insert", padding=5)
-        entry_frame.pack(fill=tk.X, pady=5)
-        ttk.Entry(entry_frame, textvariable=self.add_text).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
-        ttk.Button(entry_frame, text="Preview Rename", command=self.preview_add_mode).pack(side=tk.LEFT, padx=4)
-        ttk.Label(frame, text="Example: file.txt → PREFIXfile.txt / fileSUFFIX.txt", foreground="gray").pack(pady=4)
-
-    def create_number_mode_ui(self):
-        frame = ttk.Frame(self.dynamic_frame)
-        frame.pack(fill=tk.BOTH, expand=True)
-        info = ttk.LabelFrame(frame, text="Info", padding=5)
-        info.pack(fill=tk.X, pady=5)
-        ttk.Label(info, text="Rename files to 1.ext, 2.ext … keep original extension.", wraplength=320).pack(anchor=tk.W)
-
-        criteria_frame = ttk.LabelFrame(frame, text="Sort files by", padding=5)
-        criteria_frame.pack(fill=tk.X, pady=5)
-        ttk.Radiobutton(criteria_frame, text="File Create Time", variable=self.number_criteria, value="time").pack(side=tk.LEFT, padx=4)
-        ttk.Radiobutton(criteria_frame, text="File Size", variable=self.number_criteria, value="size").pack(side=tk.LEFT, padx=4)
-
-        order_frame = ttk.LabelFrame(frame, text="Sort Direction", padding=5)
-        order_frame.pack(fill=tk.X, pady=5)
-        ttk.Checkbutton(order_frame, text="Reverse (Newest / Largest first)", variable=self.number_reverse_sort).pack(anchor=tk.W)
-        ttk.Button(frame, text="Preview Number Rename", command=self.preview_number_mode).pack(pady=10)
-
-    def select_folder(self):
-        fd = filedialog.askdirectory()
-        if fd:
-            self.folder_path.set(fd)
-            self.refresh_file_list()
-
-    def refresh_file_list(self):
-        self.file_listbox.delete(0, tk.END)
-        fp = self.folder_path.get()
-        if not fp or not os.path.isdir(fp):
-            self.file_list = []
-            return
-        try:
-            all_entries = os.listdir(fp)
-            files = [f for f in all_entries if os.path.isfile(os.path.join(fp, f))]
-        except Exception as e:
-            messagebox.showerror("Folder Error", str(e))
-            self.file_list = []
-            return
-
-        selected_exts = [k for k, v in self.ext_vars.items() if v.get()]
-        if selected_exts:
-            filtered = []
-            for fname in files:
-                _, e = os.path.splitext(fname)
-                if e.lower() in [x.lower() for x in selected_exts]:
-                    filtered.append(fname)
-        else:
-            filtered = files
-        self.file_list = filtered
-        for f in filtered:
-            self.file_listbox.insert(tk.END, f)
-
-    def show_preview_window(self, rename_plan):
-        """rename_plan: list[(old_name, new_name)]"""
-        win = Toplevel(self.root)
-        win.title("Rename Preview — Confirm before apply!")
-        win.geometry("640x420")
-        ttk.Label(win, text="⚠️ Please backup files before executing rename!", foreground="red").pack(pady=3)
-        frame = ttk.Frame(win)
-        frame.pack(fill=tk.BOTH, expand=True, padx=6, pady=6)
-
-        tree = ttk.Treeview(frame, columns=("old", "new"), show="headings")
-        tree.heading("old", text="Original Name")
-        tree.heading("new", text="Will become")
-        tree.column("old", width=280)
-        tree.column("new", width=280)
-        sb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=tree.yview)
-        tree.configure(yscrollcommand=sb.set)
-        tree.grid(row=0, column=0, sticky="nsew")
-        sb.grid(row=0, column=1, sticky="ns")
-        frame.grid_rowconfigure(0, weight=1)
-        frame.grid_columnconfigure(0, weight=1)
-
-        conflict_count = 0
+    def refresh_list(self):
+        self.listbox.delete(0, tk.END)
         folder = self.folder_path.get()
-        for old, new in rename_plan:
-            full_new = os.path.join(folder, new)
-            conflict = os.path.exists(full_new)
-            tag = "conflict" if conflict else ""
-            if conflict:
-                conflict_count +=1
-            tree.insert("", tk.END, values=(old, new), tags=(tag,))
-        tree.tag_configure("conflict", background="#ffcccc")
+        if not folder or not os.path.isdir(folder):
+            self.file_list = []
+            return
 
-        btn_frame = ttk.Frame(win)
-        btn_frame.pack(pady=6)
-        ttk.Button(btn_frame, text="Cancel", command=win.destroy).grid(row=0, column=0, padx=8)
-        def do_execute():
-            self.execute_rename(rename_plan)
-            win.destroy()
-        if conflict_count>0:
-            ttk.Label(btn_frame, text=f"{conflict_count} filename conflicts (red rows), will skip them", foreground="darkred").grid(row=1,column=0,columnspan=2)
-        ttk.Button(btn_frame, text="Execute Rename", command=do_execute).grid(row=0, column=1, padx=8)
+        try:
+            all_files = [f for f in os.listdir(folder) if os.path.isfile(os.path.join(folder, f))]
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to read folder: {e}")
+            self.file_list = []
+            return
+
+        selected = [k for k, v in self.ext_vars.items() if v.get()]
+        if selected:
+            filtered = []
+            for fname in all_files:
+                if os.path.splitext(fname)[1].lower() in selected:
+                    filtered.append(fname)
+            self.file_list = filtered
+        else:
+            self.file_list = all_files
+
+        for f in self.file_list:
+            self.listbox.insert(tk.END, f)
+
+    def show_preview(self, plan):
+        win = tk.Toplevel(self.root)
+        win.title("Rename Preview")
+        win.geometry("600x400")
         win.transient(self.root)
         win.grab_set()
 
-    def preview_add_mode(self):
-        fp = self.folder_path.get()
-        if not fp or not os.path.isdir(fp):
-            messagebox.showwarning("Warning", "Select folder first")
+        tk.Label(win, text="⚠ Backup your files before renaming!", fg='red').pack(pady=5)
+
+        tree = ttk.Treeview(win, columns=("old", "new"), show="headings")
+        tree.heading("old", text="Original Name")
+        tree.heading("new", text="New Name")
+        tree.column("old", width=260)
+        tree.column("new", width=260)
+        tree.pack(fill=tk.BOTH, expand=True, padx=8, pady=5)
+
+        conflict = 0
+        folder = self.folder_path.get()
+        for old, new in plan:
+            new_path = os.path.join(folder, new)
+            if os.path.exists(new_path) and old != new:
+                tag = "red"
+                conflict += 1
+            else:
+                tag = ""
+            tree.insert("", tk.END, values=(old, new), tags=(tag,))
+        tree.tag_configure("red", background="#ffcccc")
+
+        if conflict > 0:
+            tk.Label(win, text=f"{conflict} filename conflict(s), these will be skipped", fg='darkred').pack()
+
+        btn_frame = ttk.Frame(win)
+        btn_frame.pack(pady=8)
+        ttk.Button(btn_frame, text="Cancel", command=win.destroy).grid(row=0, column=0, padx=10)
+
+        def run_rename():
+            self.do_rename(plan)
+            win.destroy()
+        ttk.Button(btn_frame, text="Execute Rename", command=run_rename).grid(row=0, column=1, padx=10)
+
+    def preview_add(self):
+        folder = self.folder_path.get()
+        if not folder or not os.path.isdir(folder):
+            messagebox.showwarning("Warning", "Select a folder first")
             return
         text = self.add_text.get().strip()
         if not text:
-            messagebox.showwarning("Warning", "Fill text to add")
+            messagebox.showwarning("Warning", "Enter text to insert")
             return
-        files = self.file_list
-        if not files:
-            messagebox.showinfo("Info", "No filtered files")
+        if not self.file_list:
+            messagebox.showinfo("Info", "No matching files")
             return
-        pos = self.add_position.get()
+
         plan = []
-        for old in files:
-            name, ext = os.path.splitext(old)
+        pos = self.add_pos.get()
+        for old_name in self.file_list:
+            name, ext = os.path.splitext(old_name)
             if pos == "prefix":
-                new = text + name + ext
+                new_name = text + name + ext
             else:
-                new = name + text + ext
-            plan.append((old, new))
-        self.show_preview_window(plan)
+                new_name = name + text + ext
+            plan.append((old_name, new_name))
 
-    def preview_number_mode(self):
-        fp = self.folder_path.get()
-        if not fp or not os.path.isdir(fp):
-            messagebox.showwarning("Warning", "Select folder first")
-            return
-        files = self.file_list
-        if not files:
-            messagebox.showinfo("Info", "No filtered files")
-            return
-        crit = self.number_criteria.get()
-        rev = self.number_reverse_sort.get()
-        finfo = []
-        for f in files:
-            full = os.path.join(fp, f)
-            if crit == "time":
-                tm = get_file_creation_time(full)
-                finfo.append((tm, f))
-            else:
-                sz = os.path.getsize(full)
-                finfo.append((sz, f))
-        finfo.sort(key=lambda x:x[0], reverse=rev)
-        sorted_names = [n for _,n in finfo]
-        plan = []
-        for idx, old in enumerate(sorted_names, start=1):
-            _, ext = os.path.splitext(old)
-            new = f"{idx}{ext}"
-            plan.append((old, new))
-        self.show_preview_window(plan)
+        self.show_preview(plan)
 
-    def execute_rename(self, rename_plan):
+    def preview_number(self):
         folder = self.folder_path.get()
-        ok = 0
-        skip_conflict = 0
-        error = 0
-        for old_name, new_name in rename_plan:
-            oldp = os.path.join(folder, old_name)
-            newp = os.path.join(folder, new_name)
-            if os.path.exists(newp) and oldp != newp:
-                skip_conflict += 1
+        if not folder or not os.path.isdir(folder):
+            messagebox.showwarning("Warning", "Select a folder first")
+            return
+        if not self.file_list:
+            messagebox.showinfo("Info", "No matching files")
+            return
+
+        file_info = []
+        for f in self.file_list:
+            full_path = os.path.join(folder, f)
+            if self.sort_by.get() == "time":
+                val = get_file_ctime(full_path)
+            else:
+                val = os.path.getsize(full_path)
+            file_info.append((val, f))
+
+        file_info.sort(key=lambda x: x[0], reverse=self.reverse_sort.get())
+        sorted_files = [n for _, n in file_info]
+
+        plan = []
+        for i, old_name in enumerate(sorted_files, 1):
+            ext = os.path.splitext(old_name)[1]
+            plan.append((old_name, f"{i}{ext}"))
+
+        self.show_preview(plan)
+
+    def do_rename(self, plan):
+        folder = self.folder_path.get()
+        success = 0
+        skip = 0
+        err = 0
+
+        for old, new in plan:
+            old_p = os.path.join(folder, old)
+            new_p = os.path.join(folder, new)
+            if os.path.exists(new_p) and old_p != new_p:
+                skip += 1
                 continue
             try:
-                os.rename(oldp, newp)
-                ok += 1
+                os.rename(old_p, new_p)
+                success += 1
             except Exception as e:
-                error +=1
-                messagebox.showerror("Rename Error", f"{old_name} → {new_name}\n{e}")
-        messagebox.showinfo("Complete",
-                            f"Success:{ok}\nSkipped(conflict):{skip_conflict}\nErrors:{error}")
-        self.refresh_file_list()
+                err += 1
+                print(f"Rename failed: {old} -> {new}, reason: {e}")
+
+        messagebox.showinfo("Completed", f"Success: {success}\nSkipped(conflict): {skip}\nFailed: {err}")
+        self.refresh_list()
 
 
 if __name__ == "__main__":
     root = tk.Tk()
-    app = BatchRenamerApp(root)
+    app = BatchRenamer(root)
     root.mainloop()
